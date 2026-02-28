@@ -1,0 +1,7 @@
+POST http://localhost:8080/api/validate_chirp HTTP/1.1
+content-type: application/json
+
+{
+  "body": "I hear Mastodon is better than Chirpy. sharbert I need to migrate",
+  "extra": "this should be ignored"
+}
