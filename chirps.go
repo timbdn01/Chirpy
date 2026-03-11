@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/timbdn01/Chirpy/internal/database"
+	"github.com/timbdn01/Chirpy/internal/auth"
 )
 
 type Chirp struct {
@@ -44,7 +45,6 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 	//take a JSON body with "body" and "user_id" fields, validate the chirp body, and if valid, create a new chirp in the database and return status code 201 with the full chirp resource in the body. If the chirp is invalid, return status code 400 with an error message.
 	type parameters struct {
 		Body string `json:"body"`
-		UserID string `json:"user_id"`
 	}
 	type returnVals struct {
 		ID uuid.UUID `json:"id"`
@@ -53,9 +53,21 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		Body string `json:"body"`
 		UserID uuid.UUID `json:"user_id"`
 	}
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find JWT", err)
+		return
+	}
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT", err)
+		return
+	}
+
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
-	err := decoder.Decode(&params)
+	err = decoder.Decode(&params)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters", err)
 		return
@@ -66,13 +78,12 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	cleaned_body := profanityFilter(params.Body)
-	userID, err := uuid.Parse(params.UserID)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid user ID", err)
 		return
 	}
 	chirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
-		Body: cleaned_body,
+		Body:   cleaned_body,
 		UserID: userID,
 	})
 
@@ -144,4 +155,42 @@ func (cfg *apiConfig) handlerGetChirpByID(w http.ResponseWriter, r *http.Request
 		Body:      chirp.Body,
 		UserID:    chirp.UserID,
 	})
+}
+
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	//authenticate the user, get the chirp ID from the URL path, delete the chirp with that ID if it exists, or return a 404 if it doesn't. Return status code 204 if the chirp was successfully deleted.
+	
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't find JWT", err)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.jwtSecret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Couldn't validate JWT", err)
+		return
+	}
+
+	chirpIDStr := strings.TrimPrefix(r.URL.Path, "/api/chirps/")
+	chirpID, err := uuid.Parse(chirpIDStr)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid chirp ID", err)
+		return
+	}
+	chirp, err := cfg.db.GetChirpByID(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Chirp not found", err)
+		return
+	}
+	if chirp.UserID != userID {
+		respondWithError(w, http.StatusForbidden, "Chirp does not belong to user", nil)
+		return
+	}
+	err = cfg.db.DeleteChirpByID(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, "Chirp not found", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
